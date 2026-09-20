@@ -1,0 +1,49 @@
+{
+  "cosplay_target_group": {
+    "type": "string",
+    "description": "传话目标群号（私聊机器人消息将自动转发到该群，如：123456789）",
+    "default": ""
+  },
+  "weapon_cooldown_seconds": {
+    "type": "int",
+    "description": "武器抽卡个人冷却时间（秒）",
+    "default": 60
+  },
+  "clean_hour": {
+    "type": "int",
+    "description": "每日定时清理数据的时间点（24小时制，例如 4 表示凌晨 04:00）",
+    "default": 4
+  },
+  "repeat_allow_count": {
+    "type": "int",
+    "description": "打断复读：允许自然复读的安全条数（在此条数内不打断）",
+    "default": 2
+  },
+  "repeat_base_prob": {
+    "type": "float",
+    "description": "打断复读：超出安全条数后的起步打断概率（0.0 ~ 1.0）",
+    "default": 0.25
+  },
+  "repeat_prob_step": {
+    "type": "float",
+    "description": "打断复读：随后每增加一条复读递增的概率步长（0.0 ~ 1.0）",
+    "default": 0.25
+  },
+  "repeat_max_count": {
+    "type": "int",
+    "description": "打断复读：强制 100% 打断的最大复读条数",
+    "default": 6
+  },
+  "repeat_interrupt_suffix": {
+    "type": "string",
+    "description": "打断复读追加的后缀字符串",
+    "default": "喵"
+  },
+  "reminder_rules": {
+    "type": "text",
+    "description": "多用户关键词私聊提醒规则",
+    "hint": "每行一条规则，格式为：【QQ号: 关键词1, 关键词2】。例如：10001: 管理员, 组长",
+    "obvious_hint": true,
+    "default": "10001: 管理, admin\n# 格式示例：每行一条，【QQ号: 关键词1, 关键词2】（逗号或空格隔开即可）\n# 10002: 组长, 小明"
+  }
+}
