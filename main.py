@@ -111,7 +111,8 @@ class CatHelperPlugin(Star):
         if not target_group:
             return
 
-        target_umo = f"{self.platform_name}:GroupMessage:{target_group}"
+        platform_id = event.unified_msg_origin.split(":", 1)[0] if event.unified_msg_origin and ":" in event.unified_msg_origin else self.platform_name
+        target_umo = f"{platform_id}:GroupMessage:{target_group}"
         # 原样转发消息链内容
         await self.context.send_message(target_umo, event.message_obj.message)
 
@@ -340,7 +341,9 @@ class CatHelperPlugin(Star):
             hit_keywords = [kw for kw in keywords if kw in text]
             if hit_keywords:
                 notified_qqs.add(target_qq)
-                target_umo = f"{self.platform_name}:PrivateMessage:{target_qq}"
+                # 动态获取当前事件的平台ID，并将单聊消息类型设为 AstrBot 规范的 FriendMessage
+                platform_id = event.unified_msg_origin.split(":", 1)[0] if event.unified_msg_origin and ":" in event.unified_msg_origin else self.platform_name
+                target_umo = f"{platform_id}:FriendMessage:{target_qq}"
 
                 notice_text = (
                     f"【群聊提醒】\n"
