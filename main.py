@@ -41,7 +41,7 @@ class GroupRepeatState:
     last_text: str = ""
     repeat_count: int = 0
 
-@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.5")
+@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.6")
 class CatHelperPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -332,6 +332,28 @@ class CatHelperPlugin(Star):
         cleaned = re.sub(r"\[At:[^\]]+\]", "", cleaned)
         return cleaned.strip()
 
+    def _extract_at_target_qqs(self, event: AstrMessageEvent) -> Set[str]:
+        """提取消息中直接 @ 的目标用户 QQ 列表（包含 'all'，排除仅在引用片段中出现的 @）"""
+        at_qqs = set()
+        if event.message_obj and isinstance(event.message_obj.message, list):
+            for seg in event.message_obj.message:
+                if isinstance(seg, Comp.At) and getattr(seg, "qq", None) is not None:
+                    at_qqs.add(str(seg.qq).strip())
+                elif isinstance(seg, Comp.AtAll):
+                    at_qqs.add("all")
+            return at_qqs
+
+        # 兜底：若无结构化组件列表，从文本中正则提取（先剔除引用消息，避免引入被引用消息中的 @）
+        raw_text = event.message_str or ""
+        cleaned = re.sub(r"\[引用消息[\s\S]*?\]", "", raw_text)
+        for m in re.finditer(r"\[At:([^\]]+)\]", cleaned):
+            at_qqs.add(m.group(1).strip())
+        for m in re.finditer(r"@\S+\((\d+)\)", cleaned):
+            at_qqs.add(m.group(1).strip())
+        if "[AtAll]" in cleaned or "@全体成员" in cleaned:
+            at_qqs.add("all")
+        return at_qqs
+
     async def _get_group_name(self, event: AstrMessageEvent, group_id: str) -> str:
         """获取群组名称（优先读取缓存，其次尝试适配器API与通用接口，失败回退为群号）"""
         if not group_id:
@@ -396,6 +418,10 @@ class CatHelperPlugin(Star):
         if not rules:
             return
 
+        # 提取消息中直接 @ 的目标用户（若消息已经 @ 了目标，QQ 已有系统强提醒，无需重复私聊通知）
+        at_targets = self._extract_at_target_qqs(event)
+        is_at_all = "all" in at_targets
+
         # 记录本条消息已通知的目标 QQ，避免同条消息命中同一用户的多个词而重复打扰
         notified_qqs: Set[str] = set()
 
@@ -406,6 +432,10 @@ class CatHelperPlugin(Star):
 
             # 排除自己提到自己关键词的情况
             if sender_id == target_qq:
+                continue
+
+            # 过滤掉已包含 @ 目标用户（或 @全体成员）的提醒
+            if is_at_all or target_qq in at_targets:
                 continue
 
             raw_keywords = rule.get("keywords", [])
@@ -432,5 +462,6 @@ class CatHelperPlugin(Star):
                 )
                 notice_chain = MessageChain().message(notice_text)
                 await self.context.send_message(target_umo, notice_chain)
+
 
 
