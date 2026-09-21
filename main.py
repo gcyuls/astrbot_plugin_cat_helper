@@ -40,7 +40,7 @@ class GroupRepeatState:
     last_text: str = ""
     repeat_count: int = 0
 
-@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.3")
+@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.4")
 class CatHelperPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -313,12 +313,29 @@ class CatHelperPlugin(Star):
 
         return rules
 
+    def _extract_content_text(self, event: AstrMessageEvent) -> str:
+        """提取消息中用户实际输入的正文内容（排除引用消息与被@用户的昵称）"""
+        if event.message_obj and isinstance(event.message_obj.message, list):
+            plain_texts = [
+                seg.text
+                for seg in event.message_obj.message
+                if isinstance(seg, Comp.Plain) and hasattr(seg, "text") and seg.text
+            ]
+            return "".join(plain_texts).strip()
+
+        # 兜底：若无法获取结构化组件列表，使用正则剔除引用消息与 At 标签
+        raw_text = event.message_str or ""
+        cleaned = re.sub(r"\[引用消息[\s\S]*?\]", "", raw_text)
+        cleaned = re.sub(r"@\S+\(\d+\)", "", cleaned)
+        cleaned = re.sub(r"\[At:[^\]]+\]", "", cleaned)
+        return cleaned.strip()
+
     # ================= 6. 多用户关键词呼叫私聊通知模块 =================
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def on_keyword_reminder(self, event: AstrMessageEvent):
         """群聊内提及配置的关键词时，主动私聊通知对应的被提醒人（支持多用户与去重）"""
-        text = event.message_str
-        if not text:
+        clean_text = self._extract_content_text(event)
+        if not clean_text:
             return
 
         sender_id = str(event.get_sender_id())
@@ -348,8 +365,8 @@ class CatHelperPlugin(Star):
             else:
                 keywords = [str(k).strip() for k in raw_keywords if str(k).strip()]
 
-            # 匹配关键词
-            hit_keywords = [kw for kw in keywords if kw in text]
+            # 仅匹配用户实际输入的正文关键词
+            hit_keywords = [kw for kw in keywords if kw in clean_text]
             if hit_keywords:
                 notified_qqs.add(target_qq)
                 # 动态获取当前事件的平台ID，并将单聊消息类型设为 AstrBot 规范的 FriendMessage
@@ -359,7 +376,8 @@ class CatHelperPlugin(Star):
                 notice_text = (
                     f"【群聊提醒】\n"
                     f"来自群 [{group_id}] 的 [{sender_name}] 提及了你（触发词: {', '.join(hit_keywords)}）：\n"
-                    f"“{text}”"
+                    f"“{clean_text}”"
                 )
                 notice_chain = MessageChain().message(notice_text)
                 await self.context.send_message(target_umo, notice_chain)
+
