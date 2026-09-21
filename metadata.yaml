@@ -1,6 +1,6 @@
 name: astrbot_plugin_cat_helper
 display_name: 呆猫群聊管家与怪猎助手
-version: 1.0.4
+version: 1.0.5
 author: gcyuls
 desc: 怪物猎人集会码助手、14种武器抽卡、渐进式概率打断复读、私聊传话与多用户关键词呼叫私聊提醒
 repo: https://github.com/gcyuls/astrbot_plugin_cat_helper

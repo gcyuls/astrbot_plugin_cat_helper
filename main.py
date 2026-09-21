@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Set
 
 from astrbot.api import AstrBotConfig
+from astrbot.api.all import logger
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 import astrbot.api.message_components as Comp
@@ -40,7 +41,7 @@ class GroupRepeatState:
     last_text: str = ""
     repeat_count: int = 0
 
-@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.4")
+@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.5")
 class CatHelperPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -69,6 +70,7 @@ class CatHelperPlugin(Star):
         # 3. 运行时内存状态（按用户/群聊隔离）
         self.weapon_cooldown: Dict[str, datetime] = {}
         self.group_repeat_states: Dict[str, GroupRepeatState] = {}
+        self.group_names: Dict[str, str] = {}
 
         # 4. 后台调度维护任务
         self.scheduler_task = asyncio.create_task(self._daily_clean_loop())
@@ -330,6 +332,53 @@ class CatHelperPlugin(Star):
         cleaned = re.sub(r"\[At:[^\]]+\]", "", cleaned)
         return cleaned.strip()
 
+    async def _get_group_name(self, event: AstrMessageEvent, group_id: str) -> str:
+        """获取群组名称（优先读取缓存，其次尝试适配器API与通用接口，失败回退为群号）"""
+        if not group_id:
+            return "未知群聊"
+        if group_id in self.group_names:
+            return self.group_names[group_id]
+
+        # 1. 尝试直接从已解析的事件对象中获取
+        if hasattr(event, "message_obj") and event.message_obj:
+            group_obj = getattr(event.message_obj, "group", None)
+            if group_obj and getattr(group_obj, "group_name", None):
+                name = str(group_obj.group_name).strip()
+                if name:
+                    self.group_names[group_id] = name
+                    return name
+
+        # 2. 若为 OneBot / aiocqhttp 平台，优先直接调用 get_group_info（避免全量成员列表拉取开销）
+        if hasattr(event, "bot") and hasattr(event.bot, "call_action"):
+            try:
+                gid = int(group_id) if str(group_id).isdigit() else group_id
+                routing_params = {}
+                if hasattr(event, "message_obj") and getattr(event.message_obj, "self_id", None):
+                    routing_params["self_id"] = event.message_obj.self_id
+                info = await event.bot.call_action("get_group_info", group_id=gid, **routing_params)
+                if isinstance(info, dict) and info.get("group_name"):
+                    name = str(info["group_name"]).strip()
+                    if name:
+                        self.group_names[group_id] = name
+                        return name
+            except Exception as e:
+                logger.debug(f"[cat_helper] Failed to call get_group_info directly: {e}")
+
+        # 3. 尝试调用 AstrBot 通用 event.get_group() 接口
+        if hasattr(event, "get_group"):
+            try:
+                group = await event.get_group()
+                if group and getattr(group, "group_name", None):
+                    name = str(group.group_name).strip()
+                    if name:
+                        self.group_names[group_id] = name
+                        return name
+            except Exception as e:
+                logger.debug(f"[cat_helper] Failed to call event.get_group(): {e}")
+
+        # 4. 兜底回退为群号
+        return str(group_id)
+
     # ================= 6. 多用户关键词呼叫私聊通知模块 =================
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def on_keyword_reminder(self, event: AstrMessageEvent):
@@ -373,11 +422,15 @@ class CatHelperPlugin(Star):
                 platform_id = event.unified_msg_origin.split(":", 1)[0] if event.unified_msg_origin and ":" in event.unified_msg_origin else self.platform_name
                 target_umo = f"{platform_id}:FriendMessage:{target_qq}"
 
+                # 获取群名称（回退为群号）
+                group_name = await self._get_group_name(event, group_id)
+
                 notice_text = (
                     f"【群聊提醒】\n"
-                    f"来自群 [{group_id}] 的 [{sender_name}] 提及了你（触发词: {', '.join(hit_keywords)}）：\n"
+                    f"来自群 [{group_name}] 的 [{sender_name}] 提及了你（触发词: {', '.join(hit_keywords)}）：\n"
                     f"“{clean_text}”"
                 )
                 notice_chain = MessageChain().message(notice_text)
                 await self.context.send_message(target_umo, notice_chain)
+
 
