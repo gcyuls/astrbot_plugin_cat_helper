@@ -40,7 +40,7 @@ class GroupRepeatState:
     last_text: str = ""
     repeat_count: int = 0
 
-@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.1")
+@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.2")
 class CatHelperPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -112,6 +112,8 @@ class CatHelperPlugin(Star):
             return
 
         platform_id = event.unified_msg_origin.split(":", 1)[0] if event.unified_msg_origin and ":" in event.unified_msg_origin else self.platform_name
+        target_umo = f"{platform_id}:GroupMessage:{target_group}"
+
         # 原样转发消息链内容（封装为 MessageChain 实例）
         raw_message = event.message_obj.message
         if isinstance(raw_message, MessageChain):
