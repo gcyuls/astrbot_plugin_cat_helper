@@ -41,7 +41,7 @@ class GroupRepeatState:
     last_text: str = ""
     repeat_count: int = 0
 
-@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.7")
+@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.8")
 class CatHelperPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -119,7 +119,8 @@ class CatHelperPlugin(Star):
 
         # 2. 文本消息判定（QQNT 将好友申请推入私聊会话的系统通知，如“请求添加你为好友”）
         msg_str = (event.message_str or "").strip()
-        if "请求添加你为好友" in msg_str:
+        keywords = ("请求添加你为好友", "请求添加好友", "请求加你为好友", "请求加为单向好友")
+        if any(kw in msg_str for kw in keywords):
             applicant_qq = str(event.get_sender_id()).strip()
             comment = ""
             if "：" in msg_str or ":" in msg_str:
@@ -132,23 +133,14 @@ class CatHelperPlugin(Star):
     # ================= 1. 传话 / Cosplay 模块 =================
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE)
     async def on_private_message_proxy(self, event: AstrMessageEvent):
-        """私聊消息自动转发到目标群聊（严格限制仅管理员可用，严禁转发好友申请与系统请求）"""
+        """私聊消息自动转发到目标群聊（转发所有私聊消息，仅过滤屏蔽好友申请等系统提示）"""
         target_group = str(self.config.get("cosplay_target_group", "")).strip()
         if not target_group:
             return
 
-        # 1. 基础安全校验：拦截好友申请与系统请求类消息，严禁转发入群
+        # 仅拦截好友申请与系统请求类消息，严禁转发入群
         is_req, _, _ = self._parse_friend_request(event)
         if is_req:
-            return
-
-        # 2. 权限校验：仅允许管理员私聊消息转发到群聊，防止陌生人消息被扩散进群
-        sender_id = str(event.get_sender_id())
-        admin_qq = str(self.config.get("admin_qq", "")).strip()
-        if not admin_qq:
-            logger.warning("[cat_helper] 未配置 admin_qq，已跳过私聊传话转发以确保群聊安全。请在插件配置中填写管理员QQ")
-            return
-        if sender_id != admin_qq:
             return
 
         platform_id = event.unified_msg_origin.split(":", 1)[0] if event.unified_msg_origin and ":" in event.unified_msg_origin else self.platform_name
