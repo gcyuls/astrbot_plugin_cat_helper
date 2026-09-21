@@ -1,7 +1,12 @@
 {
+  "admin_qq": {
+    "type": "string",
+    "description": "管理员QQ号（用于接收好友申请通知；配置后私聊传话功能仅对管理员开放）",
+    "default": ""
+  },
   "cosplay_target_group": {
     "type": "string",
-    "description": "传话目标群号（私聊机器人消息将自动转发到该群，如：123456789）",
+    "description": "传话目标群号（管理员私聊机器人消息将自动转发到该群，如：123456789）",
     "default": ""
   },
   "weapon_cooldown_seconds": {

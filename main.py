@@ -41,7 +41,7 @@ class GroupRepeatState:
     last_text: str = ""
     repeat_count: int = 0
 
-@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.6")
+@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.7")
 class CatHelperPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -71,6 +71,7 @@ class CatHelperPlugin(Star):
         self.weapon_cooldown: Dict[str, datetime] = {}
         self.group_repeat_states: Dict[str, GroupRepeatState] = {}
         self.group_names: Dict[str, str] = {}
+        self.notified_friend_requests: Dict[str, datetime] = {}
 
         # 4. 后台调度维护任务
         self.scheduler_task = asyncio.create_task(self._daily_clean_loop())
@@ -95,6 +96,7 @@ class CatHelperPlugin(Star):
                 # 清理冷却和复读历史状态
                 self.weapon_cooldown.clear()
                 self.group_repeat_states.clear()
+                self.notified_friend_requests.clear()
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -105,12 +107,48 @@ class CatHelperPlugin(Star):
         if self.scheduler_task and not self.scheduler_task.done():
             self.scheduler_task.cancel()
 
+    def _parse_friend_request(self, event: AstrMessageEvent) -> tuple[bool, str, str]:
+        """判断是否为好友申请事件，返回 (is_friend_request, applicant_qq, comment)"""
+        # 1. 结构化请求事件（OneBot V11 post_type == 'request' 且 request_type == 'friend'）
+        raw = getattr(event.message_obj, "raw_message", None)
+        if isinstance(raw, dict) or hasattr(raw, "get"):
+            if raw.get("post_type") == "request" and raw.get("request_type") == "friend":
+                applicant_qq = str(raw.get("user_id") or event.get_sender_id()).strip()
+                comment = str(raw.get("comment", "")).strip()
+                return True, applicant_qq, comment
+
+        # 2. 文本消息判定（QQNT 将好友申请推入私聊会话的系统通知，如“请求添加你为好友”）
+        msg_str = (event.message_str or "").strip()
+        if "请求添加你为好友" in msg_str:
+            applicant_qq = str(event.get_sender_id()).strip()
+            comment = ""
+            if "：" in msg_str or ":" in msg_str:
+                sep = "：" if "：" in msg_str else ":"
+                comment = msg_str.split(sep, 1)[1].strip()
+            return True, applicant_qq, comment
+
+        return False, "", ""
+
     # ================= 1. 传话 / Cosplay 模块 =================
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE)
     async def on_private_message_proxy(self, event: AstrMessageEvent):
-        """私聊消息自动转发到目标群聊（目标群号从配置项读取）"""
+        """私聊消息自动转发到目标群聊（严格限制仅管理员可用，严禁转发好友申请与系统请求）"""
         target_group = str(self.config.get("cosplay_target_group", "")).strip()
         if not target_group:
+            return
+
+        # 1. 基础安全校验：拦截好友申请与系统请求类消息，严禁转发入群
+        is_req, _, _ = self._parse_friend_request(event)
+        if is_req:
+            return
+
+        # 2. 权限校验：仅允许管理员私聊消息转发到群聊，防止陌生人消息被扩散进群
+        sender_id = str(event.get_sender_id())
+        admin_qq = str(self.config.get("admin_qq", "")).strip()
+        if not admin_qq:
+            logger.warning("[cat_helper] 未配置 admin_qq，已跳过私聊传话转发以确保群聊安全。请在插件配置中填写管理员QQ")
+            return
+        if sender_id != admin_qq:
             return
 
         platform_id = event.unified_msg_origin.split(":", 1)[0] if event.unified_msg_origin and ":" in event.unified_msg_origin else self.platform_name
@@ -128,6 +166,49 @@ class CatHelperPlugin(Star):
             return
 
         await self.context.send_message(target_umo, chain)
+
+    # ================= 1.5 好友申请通知模块 =================
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_friend_request_notify(self, event: AstrMessageEvent):
+        """收到好友申请时，阻止事件进一步扩散并向管理员发送私聊通知"""
+        is_req, applicant_qq, comment = self._parse_friend_request(event)
+        if not is_req:
+            return
+
+        # 阻断该事件继续流向后续插件或 LLM 会话，彻底杜绝意外响应或向群扩散
+        event.stop_event()
+
+        admin_qq = str(self.config.get("admin_qq", "")).strip()
+        if not admin_qq:
+            logger.warning("[cat_helper] 收到好友申请，但未配置 admin_qq，无法发送通知")
+            return
+
+        now = datetime.now()
+        last_time = self.notified_friend_requests.get(applicant_qq)
+        if last_time and (now - last_time).total_seconds() < 300:
+            # 5 分钟内同一 QQ 的申请已通知过，防抖去重
+            return
+        self.notified_friend_requests[applicant_qq] = now
+
+        sender_name = event.get_sender_name() or "未知昵称"
+        if sender_name == applicant_qq:
+            sender_name = "新用户"
+
+        notice_lines = [
+            "【好友申请通知】",
+            "收到新的好友申请：",
+            f"• 申请人: [{sender_name}] ({applicant_qq})"
+        ]
+        if comment:
+            notice_lines.append(f"• 验证信息: {comment}")
+        notice_lines.append(f"• 时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        notice_text = "\n".join(notice_lines)
+
+        platform_id = event.unified_msg_origin.split(":", 1)[0] if event.unified_msg_origin and ":" in event.unified_msg_origin else self.platform_name
+        target_umo = f"{platform_id}:FriendMessage:{admin_qq}"
+        notice_chain = MessageChain().message(notice_text)
+        await self.context.send_message(target_umo, notice_chain)
+
 
     # ================= 2. 录入集会码模块 =================
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
