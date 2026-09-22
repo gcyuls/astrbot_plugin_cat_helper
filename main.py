@@ -41,7 +41,7 @@ class GroupRepeatState:
     last_text: str = ""
     repeat_count: int = 0
 
-@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.8")
+@register("astrbot_plugin_cat_helper", "gcyuls", "呆猫群聊管家与怪猎助手", "1.0.9")
 class CatHelperPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -286,19 +286,67 @@ class CatHelperPlugin(Star):
         event.stop_event()
 
     # ================= 5. 复读机与渐进式打断模块 =================
+    def _is_pure_text_message(self, event: AstrMessageEvent) -> tuple[bool, str]:
+        """判断是否为纯文本消息，返回 (is_pure_text, clean_text)。
+        仅当消息为纯文本时返回 True（允许携带引用 Reply，但不含图片、表情、语音、视频、文件等非文本组件）。
+        """
+        components = getattr(event.message_obj, "message", None)
+        raw_text = (event.message_str or "").strip()
+
+        if components is not None:
+            # 过滤 Reply 组件（引用回复不改变消息的主体文本属性）
+            non_reply_segs = [c for c in components if not isinstance(c, Comp.Reply)]
+            if not non_reply_segs:
+                return False, ""
+
+            # 若包含任何非 Plain 组件（如 Image, Face, Record, Video, Poke, File, Forward 等），判定为非纯文本
+            if any(not isinstance(c, Comp.Plain) for c in non_reply_segs):
+                return False, ""
+
+            # 全为 Plain 组件，合并文本并去除首尾空白
+            text = "".join(getattr(c, "text", "") for c in non_reply_segs).strip()
+            if not text:
+                return False, ""
+            return True, text
+
+        # 无 components 时，根据 event.message_str 进行占位符与内容判定
+        if not raw_text:
+            return False, ""
+
+        non_text_patterns = (
+            "[图片]", "[表情", "[语音]", "[视频]", "[文件]",
+            "[戳一戳]", "[骰子]", "[猜拳]", "[转发消息]", "[合并转发]"
+        )
+        if any(p in raw_text for p in non_text_patterns):
+            return False, ""
+
+        return True, raw_text
+
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def on_group_repeat_handler(self, event: AstrMessageEvent):
-        """复读机逻辑：句式复读 + 渐进式概率打断"""
-        text = event.message_str.strip()
-        if not text:
-            return
-
-        # 过滤指令与集会码，避免误入复读逻辑
-        clean_text = text.lstrip("/／")
-        if clean_text in ("码来", "今天玩什么") or is_valid_gathering_code(text):
+        """复读机逻辑：仅对纯文本消息进行打断，历史记录跟踪所有消息类型（非文本消息中断文本复读）"""
+        self_id = str(event.get_self_id() or "")
+        sender_id = str(event.get_sender_id() or "")
+        if self_id and sender_id and self_id == sender_id:
             return
 
         group_id = str(event.message_obj.group_id)
+        state = self.group_repeat_states.setdefault(group_id, GroupRepeatState())
+
+        is_pure_text, text = self._is_pure_text_message(event)
+
+        # 非纯文本消息（图片、表情、语音、视频、文件等）：更新历史状态为非文本，中断文本复读计数，绝不对其打断
+        if not is_pure_text:
+            state.last_text = ""
+            state.repeat_count = 0
+            return
+
+        # 过滤指令与集会码，避免误入复读逻辑；同时作为有效消息打断复读
+        clean_text = text.lstrip("/／")
+        if clean_text in ("码来", "今天玩什么") or is_valid_gathering_code(text):
+            state.last_text = ""
+            state.repeat_count = 0
+            return
 
         # 规则 A：特定前缀/后缀/结构复读（尾部附加零宽空格 \u200b，防止自死循环）
         prefixes = ("啊啊", "唉", "并非", "看看")
@@ -311,9 +359,7 @@ class CatHelperPlugin(Star):
             yield event.plain_result(text + "\u200b")
             return
 
-        # 规则 B：群隔离的渐进概率打断复读
-        state = self.group_repeat_states.setdefault(group_id, GroupRepeatState())
-
+        # 规则 B：群隔离的渐进概率打断复读（仅针对纯文本）
         if text == state.last_text:
             state.repeat_count += 1
 
@@ -338,7 +384,7 @@ class CatHelperPlugin(Star):
                 state.repeat_count = 0
                 yield event.plain_result(f"{text}{suffix}")
         else:
-            # 出现新内容，重置计数
+            # 出现新纯文本内容，记录并重置计数为 1
             state.last_text = text
             state.repeat_count = 1
 
